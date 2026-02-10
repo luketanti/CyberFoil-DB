@@ -1,0 +1,12 @@
+services:
+  media-db-builder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MEDIA_DB_MODE=${MEDIA_DB_MODE:-both}
+      - MEDIA_DB_RESET=${MEDIA_DB_RESET:-0}
