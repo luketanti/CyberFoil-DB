@@ -42,8 +42,10 @@ if [ "$RESET" = "1" ]; then
   echo "Reset enabled: removed selected DB files before processing"
 fi
 
-python - <<'PY'
-import json
+if [ -f build_artefacts/titles.US.en.json ]; then
+  echo "Using existing build_artefacts/titles.US.en.json"
+else
+  python - <<'PY'
 import os
 import sys
 
@@ -55,6 +57,7 @@ nut.importRegion("US", "en")
 os.rename("titledb/titles.json", "build_artefacts/titles.US.en.json")
 print("Generated build_artefacts/titles.US.en.json")
 PY
+fi
 
 python - <<'PY'
 import hashlib
