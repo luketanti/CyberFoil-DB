@@ -18,7 +18,7 @@ RUN python -m pip install --upgrade pip \
     && pip install requests pillow \
     && pip install -r /opt/nut/requirements.txt
 
-COPY scripts/build_media_db.sh /usr/local/bin/build_media_db.sh
-RUN chmod +x /usr/local/bin/build_media_db.sh
+COPY scripts/build_media_db.sh scripts/export_offline_db.py /usr/local/bin/
+RUN chmod +x /usr/local/bin/build_media_db.sh /usr/local/bin/export_offline_db.py
 
 ENTRYPOINT ["/usr/local/bin/build_media_db.sh"]

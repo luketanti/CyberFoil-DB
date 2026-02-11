@@ -1,77 +1,269 @@
 # CyberFoil-DB
-Contains db files for icons, banners and title info.
 
-## Build locally with Docker Compose
+CyberFoil-DB builds offline title metadata and media artefacts for CyberFoil, then exports runtime pack files.
 
-Run:
+Final target outputs:
+- `artefacts/titles.pack`
+- `artefacts/icons.pack`
+
+There is currently no `banners.pack` export in this pipeline.
+
+## Pipeline Behavior
+
+The container entrypoint (`scripts/build_media_db.sh`) performs this end-to-end flow:
+
+1. Ensure `/workspace/nut` exists (copied from `/opt/nut` on first run).
+2. Ensure `nut/titledb` exists and pull latest upstream changes.
+3. Optionally reset DB files when `MEDIA_DB_RESET=1`.
+4. Compute SHA-256 for `nut/titledb/US.en.json`.
+5. Regenerate `titles.US.en.json` when required.
+6. Write title change summaries (`titles.progress.json`, `titles.summary.json`).
+7. If not check-only mode, incrementally update media DBs (`icon.db`, `banners.db`) based on URL changes.
+8. Copy generated artefacts into `artefacts/`.
+9. Export packs with `scripts/export_offline_db.py` unless disabled.
+
+## Requirements
+
+- Docker Desktop (or compatible Docker Engine) with Compose v2.
+- Network access from container to:
+  - GitHub (`blawar/nut`, `blawar/titledb`)
+  - Nintendo image CDN URLs from title metadata.
+
+## Quick Start
+
+From repo root:
 
 ```bash
 docker compose up --build
 ```
 
-The image now pre-installs Python dependencies, so after the initial image build, subsequent runs start the DB build immediately.
+## Runtime Variables
 
-Build mode can be selected at runtime:
+| Variable | Default | Allowed values | Effect |
+|---|---|---|---|
+| `MEDIA_DB_MODE` | `both` | `icons`, `banners`, `both` | Select media DBs to process incrementally. |
+| `MEDIA_DB_RESET` | `0` | `0`, `1` | Remove selected media DB files before processing. |
+| `MEDIA_DB_EXPORT_PACKS` | `1` | `0`, `1` | Export `titles.pack` and/or `icons.pack` after build. |
+| `MEDIA_DB_FORCE_TITLES_REFRESH` | `0` | `0`, `1` | Force `titles.US.en.json` regeneration even if source hash is unchanged. |
+| `MEDIA_DB_CHECK_UPDATES_ONLY` | `0` | `0`, `1` | Run title update check only, then exit before media download and pack export. |
+| `PYTHONUNBUFFERED` | `1` | any | Python output buffering behavior. |
+
+## Usage
+
+### Bash
 
 ```bash
-# default: builds both
-docker compose up
+# Full pipeline
+docker compose up --build
 
-# build only icon.db
+# Incremental icons only
 MEDIA_DB_MODE=icons docker compose up
 
-# build only banners.db
+# Incremental banners only
 MEDIA_DB_MODE=banners docker compose up
-```
 
-Resume behavior:
-- Existing `nut/build_artefacts/icon.db` and `nut/build_artefacts/banners.db` are reused.
-- Unchanged records are skipped; only new/changed URLs are processed.
-- If interrupted, running again continues from the existing DB content.
-
-Live progress files (updated during run):
-- `artefacts/icon.progress.json`
-- `artefacts/banner.progress.json`
-- `artefacts/icon.summary.json` (final summary)
-- `artefacts/banner.summary.json` (final summary)
-
-Force a full rebuild from scratch:
-
-```bash
+# Reset selected DBs first
 MEDIA_DB_RESET=1 docker compose up
+
+# Force titles regeneration
+MEDIA_DB_FORCE_TITLES_REFRESH=1 docker compose up
+
+# Check title updates only (no media download, no pack export)
+MEDIA_DB_CHECK_UPDATES_ONLY=1 docker compose up
+
+# Disable pack export
+MEDIA_DB_EXPORT_PACKS=0 docker compose up
 ```
 
-PowerShell examples:
+### PowerShell
 
 ```powershell
+# Full pipeline
+docker compose up --build
+
+# Incremental icons only
 $env:MEDIA_DB_MODE="icons"; docker compose up
+
+# Incremental banners only
 $env:MEDIA_DB_MODE="banners"; docker compose up
+
+# Reset selected DBs first
 $env:MEDIA_DB_RESET="1"; docker compose up
+
+# Force titles regeneration
+$env:MEDIA_DB_FORCE_TITLES_REFRESH="1"; docker compose up
+
+# Check title updates only
+$env:MEDIA_DB_CHECK_UPDATES_ONLY="1"; docker compose up
+
+# Disable pack export
+$env:MEDIA_DB_EXPORT_PACKS="0"; docker compose up
 ```
 
-## Browse DB interactively
+## Generated Files
 
-Run from repo root:
+Primary outputs in `artefacts/`:
+- `titles.pack`
+- `icons.pack`
+
+Additional build/debug outputs in `artefacts/`:
+- `titles.US.en.json`
+- `icon.db`
+- `banners.db` (when built)
+- `titles.progress.json`
+- `titles.summary.json`
+- `icon.progress.json`
+- `icon.summary.json`
+- `banner.progress.json`
+- `banner.summary.json`
+
+Persistent internal cache under `nut/build_artefacts/`:
+- `titles.US.en.source.sha256`
+- `titles.US.en.json`
+- `icon.db`
+- `banners.db`
+
+## Incremental Update Logic
+
+### Title update detection
+
+Source checked: `nut/titledb/US.en.json`.
+
+`titles.US.en.json` is regenerated when:
+- `nut/build_artefacts/titles.US.en.json` is missing.
+- `MEDIA_DB_FORCE_TITLES_REFRESH=1`.
+- SHA-256 differs from `nut/build_artefacts/titles.US.en.source.sha256`.
+
+Title summary fields include:
+- `added_titles`
+- `removed_titles`
+- `metadata_changed_titles`
+- `icon_url_changed_titles`
+- `banner_url_changed_titles`
+- `unchanged_titles`
+
+`metadata_changed_titles` compares these fields: `name`, `publisher`, `intro`, `description`, `size`, `version`, `releaseDate`, `isDemo`.
+
+### Media DB incremental behavior
+
+For selected media URLs (`iconUrl`, `bannerUrl`):
+- Existing DB rows are read (`title_id -> url`).
+- Removed titles are deleted from DB (`removed_rows`).
+- Unchanged URLs are skipped (`skipped_unchanged`).
+- Only new/changed URLs are downloaded and re-encoded.
+
+Image processing settings:
+- Resize: `128x128`
+- Format: `WEBP`
+- WEBP options: `quality=80`, `method=6`
+- HTTP retries for `GET`: `429`, `500`, `502`, `503`, `504`
+
+## Pack Export Details
+
+Export script: `scripts/export_offline_db.py`.
+
+Inputs:
+- `icon.db` (`images` table)
+- `titles.US.en.json`
+
+Outputs:
+- `titles.pack` (magic `CFTITLE1`)
+- `icons.pack` (magic `CFICONP1`)
+
+Automatic export command used by builder:
+
+```bash
+python /usr/local/bin/export_offline_db.py --source-dir /workspace/artefacts --output-dir /workspace/artefacts
+```
+
+Automatic skip behavior:
+- Adds `--skip-icons` if `icon.db` is missing.
+- Adds `--skip-metadata` if `titles.US.en.json` is missing.
+
+Metadata exporter includes only meaningful rows (at least one of: `name`, `publisher`, `intro`, `description`, `size`, `version`, `releaseDate`, `isDemo`).
+
+## Manual Pack Export
+
+From repo root:
+
+```bash
+python scripts/export_offline_db.py --source-dir artefacts --output-dir artefacts
+```
+
+Supported options:
+
+```text
+--source-dir <dir>      Discover icon DB and titles JSON in a directory
+--icon-db <path>        Explicit icon DB path
+--titles-json <path>    Explicit titles JSON path
+--output-dir <dir>      Output directory (default: ./offline_db)
+--skip-icons            Export metadata pack only
+--skip-metadata         Export icons pack only
+```
+
+## Progress and Summary Files
+
+Title files:
+- `titles.progress.json` and `titles.summary.json` are final snapshots for title update checks.
+- Include source hashes, rebuild reason, and title diff counters.
+- In `MEDIA_DB_CHECK_UPDATES_ONLY=1`, these are the only summary/progress files updated during that run.
+
+Icon/Banner files:
+- `*.progress.json` updates during processing.
+- `*.summary.json` is the final completed snapshot.
+- Key metrics: `to_process`, `skipped_unchanged`, `new_rows`, `updated_rows`, `removed_rows`, `ok`, `failed`, `db_rows`.
+
+## Reset and Clean Rebuild
+
+- `MEDIA_DB_RESET=1` removes selected media DB files before rebuild.
+- `MEDIA_DB_RESET=1` does not remove `nut/titledb` history or title hash cache.
+- For fully clean state, delete `nut/` and rerun `docker compose up --build`.
+
+## Common Patterns
+
+- Daily incremental run: `docker compose up`.
+- Metadata monitoring only: `MEDIA_DB_CHECK_UPDATES_ONLY=1 docker compose up`.
+- Full refresh for selected mode: `MEDIA_DB_RESET=1 MEDIA_DB_MODE=<icons|banners|both> docker compose up`.
+- Debug build without packs: `MEDIA_DB_EXPORT_PACKS=0 docker compose up`.
+
+## Troubleshooting
+
+### Docker engine unavailable
+
+Symptom (Windows):
+- `open //./pipe/dockerDesktopLinuxEngine: Access is denied`
+
+Fix:
+- Start Docker Desktop and wait for engine readiness.
+- Run `docker compose up` again.
+
+### `env: 'bash\r': No such file or directory`
+
+Cause:
+- `scripts/build_media_db.sh` has CRLF line endings.
+
+Fix:
+- Convert file to LF.
+- Rebuild/restart container.
+
+### Packs not generated
+
+Check:
+- `MEDIA_DB_EXPORT_PACKS=1`
+- `MEDIA_DB_CHECK_UPDATES_ONLY=0`
+- Required inputs exist in `artefacts/` (`titles.US.en.json`, `icon.db`).
+
+### `icons.pack` missing in banners-only runs
+
+Expected when `icon.db` has not been built yet.
+
+Fix:
+- Run at least one icons build: `MEDIA_DB_MODE=icons docker compose up`.
+
+## Local Utility
+
+Interactive DB inspection:
 
 ```bash
 python scripts/db_browser.py
 ```
-
-It provides options to:
-- show DB info (row count, total image bytes, DB file size)
-- search entries by game name (using `titles.US.en.json`)
-- extract an image file after search by selecting a result number
-- switch between DB files (e.g. icon.db / banners.db)
-
-If you change the Dockerfile or want to refresh baked dependencies, force a clean rebuild:
-
-```bash
-docker compose build --no-cache
-docker compose up
-```
-
-Generated files will be available in:
-
-`artefacts/titles.US.en.json`  
-`artefacts/icon.db`  
-`artefacts/banners.db`
