@@ -5,17 +5,21 @@ Convert CyberFoil-DB artefacts into runtime files used by CyberFoil offline mode
 Outputs:
   - titles.pack (binary metadata container)
   - icons.pack (single-file icon container)
+  - offline_db_manifest.json (generated when both packs are exported)
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import pathlib
 import shutil
 import sqlite3
 import struct
 import sys
+import re
+from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 
 TITLE_PACK_MAGIC = b"CFTITLE1"
@@ -67,6 +71,14 @@ def normalize_ext(raw_format: str) -> str:
     return "bin"
 
 
+def normalize_url_token(raw: str) -> str:
+    # URL fields should not contain whitespace; strip all if present.
+    value = raw.strip()
+    if not value:
+        return ""
+    return re.sub(r"\s+", "", value)
+
+
 def find_candidate_file(source_dir: pathlib.Path, candidates: Tuple[str, ...]) -> pathlib.Path | None:
     for name in candidates:
         path = source_dir / name
@@ -84,6 +96,25 @@ def find_candidate_file(source_dir: pathlib.Path, candidates: Tuple[str, ...]) -
             return path
 
     return None
+
+
+def compute_file_sha256(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def build_manifest_file_entry(path: pathlib.Path, url: str) -> Dict[str, object]:
+    return {
+        "url": url,
+        "size": path.stat().st_size,
+        "sha256": compute_file_sha256(path),
+    }
 
 
 def export_metadata_pack(titles_json: pathlib.Path, output_path: pathlib.Path) -> int:
@@ -304,6 +335,24 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--skip-icons", action="store_true", help="Do not export icons")
     parser.add_argument("--skip-metadata", action="store_true", help="Do not export metadata")
+    parser.add_argument(
+        "--db-version",
+        type=str,
+        default="",
+        help="Override manifest db_version (default: current UTC timestamp).",
+    )
+    parser.add_argument(
+        "--manifest-base-url",
+        type=str,
+        default="",
+        help="Base URL used to build manifest file URLs (example: https://github.com/<owner>/<repo>/releases/latest/download).",
+    )
+    parser.add_argument(
+        "--manifest-name",
+        type=str,
+        default="offline_db_manifest.json",
+        help="Manifest file name (default: offline_db_manifest.json).",
+    )
     return parser.parse_args(argv)
 
 
@@ -337,16 +386,52 @@ def main(argv: list[str]) -> int:
 
     output_dir: pathlib.Path = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
+    generated_titles_pack: pathlib.Path | None = None
+    generated_icons_pack: pathlib.Path | None = None
 
     if need_metadata:
         print(f"[metadata] source: {titles_json}")
-        metadata_count = export_metadata_pack(titles_json, output_dir / "titles.pack")
-        print(f"[metadata] exported {metadata_count} entries -> {output_dir / 'titles.pack'}")
+        generated_titles_pack = output_dir / "titles.pack"
+        metadata_count = export_metadata_pack(titles_json, generated_titles_pack)
+        print(f"[metadata] exported {metadata_count} entries -> {generated_titles_pack}")
 
     if need_icons:
         print(f"[icons] source: {icon_db}")
-        icon_count = export_icon_pack(icon_db, output_dir / "icons.pack")
-        print(f"[icons] exported {icon_count} rows -> {output_dir / 'icons.pack'}")
+        generated_icons_pack = output_dir / "icons.pack"
+        icon_count = export_icon_pack(icon_db, generated_icons_pack)
+        print(f"[icons] exported {icon_count} rows -> {generated_icons_pack}")
+
+    if generated_titles_pack is not None and generated_icons_pack is not None:
+        manifest_base_url = normalize_url_token(args.manifest_base_url)
+        if manifest_base_url.endswith("/"):
+            manifest_base_url = manifest_base_url[:-1]
+
+        def file_url(file_name: str) -> str:
+            if manifest_base_url:
+                return f"{manifest_base_url}/{file_name}"
+            return file_name
+
+        db_version = args.db_version.strip()
+        if not db_version:
+            db_version = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+
+        manifest = {
+            "schema": 1,
+            "db_version": db_version,
+            "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "files": {
+                "titles.pack": build_manifest_file_entry(generated_titles_pack, file_url("titles.pack")),
+                "icons.pack": build_manifest_file_entry(generated_icons_pack, file_url("icons.pack")),
+            },
+        }
+
+        manifest_path = output_dir / args.manifest_name
+        with manifest_path.open("w", encoding="utf-8", newline="\n") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2, sort_keys=False)
+            f.write("\n")
+        print(f"[manifest] wrote {manifest_path}")
+    else:
+        print("[manifest] skipped (requires both metadata and icons outputs).")
 
     print("Done.")
     return 0

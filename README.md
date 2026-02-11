@@ -1,10 +1,11 @@
 # CyberFoil-DB
 
-CyberFoil-DB builds offline title metadata and media artefacts for CyberFoil, then exports runtime pack files.
+CyberFoil-DB builds offline title metadata and media artefacts for CyberFoil, then exports runtime pack files plus a manifest.
 
 Final target outputs:
 - `artefacts/titles.pack`
 - `artefacts/icons.pack`
+- `artefacts/offline_db_manifest.json`
 
 There is currently no `banners.pack` export in this pipeline.
 
@@ -20,7 +21,7 @@ The container entrypoint (`scripts/build_media_db.sh`) performs this end-to-end 
 6. Write title change summaries (`titles.progress.json`, `titles.summary.json`).
 7. If not check-only mode, incrementally update media DBs (`icon.db`, `banners.db`) based on URL changes.
 8. Copy generated artefacts into `artefacts/`.
-9. Export packs with `scripts/export_offline_db.py` unless disabled.
+9. Export packs and manifest with `scripts/export_offline_db.py` unless disabled.
 
 ## Requirements
 
@@ -43,9 +44,12 @@ docker compose up --build
 |---|---|---|---|
 | `MEDIA_DB_MODE` | `both` | `icons`, `banners`, `both` | Select media DBs to process incrementally. |
 | `MEDIA_DB_RESET` | `0` | `0`, `1` | Remove selected media DB files before processing. |
-| `MEDIA_DB_EXPORT_PACKS` | `1` | `0`, `1` | Export `titles.pack` and/or `icons.pack` after build. |
+| `MEDIA_DB_EXPORT_PACKS` | `1` | `0`, `1` | Export `titles.pack`/`icons.pack` and write manifest when both packs are available. |
 | `MEDIA_DB_FORCE_TITLES_REFRESH` | `0` | `0`, `1` | Force `titles.US.en.json` regeneration even if source hash is unchanged. |
 | `MEDIA_DB_CHECK_UPDATES_ONLY` | `0` | `0`, `1` | Run title update check only, then exit before media download and pack export. |
+| `MEDIA_DB_MANIFEST_BASE_URL` | empty | URL or empty | Base URL used for manifest file URLs. Empty uses relative file names. |
+| `MEDIA_DB_MANIFEST_NAME` | `offline_db_manifest.json` | filename | Manifest output file name. |
+| `MEDIA_DB_VERSION` | empty | string or empty | Manifest `db_version`. Empty uses current UTC timestamp (`yyyyMMddHHmmss`). |
 | `PYTHONUNBUFFERED` | `1` | any | Python output buffering behavior. |
 
 ## Usage
@@ -73,6 +77,9 @@ MEDIA_DB_CHECK_UPDATES_ONLY=1 docker compose up
 
 # Disable pack export
 MEDIA_DB_EXPORT_PACKS=0 docker compose up
+
+# Export packs + manifest with release download URLs and explicit version
+MEDIA_DB_MANIFEST_BASE_URL=https://github.com/<owner>/<repo>/releases/latest/download MEDIA_DB_VERSION=20260211213000 docker compose up
 ```
 
 ### PowerShell
@@ -98,6 +105,9 @@ $env:MEDIA_DB_CHECK_UPDATES_ONLY="1"; docker compose up
 
 # Disable pack export
 $env:MEDIA_DB_EXPORT_PACKS="0"; docker compose up
+
+# Export packs + manifest with release download URLs and explicit version
+$env:MEDIA_DB_MANIFEST_BASE_URL="https://github.com/<owner>/<repo>/releases/latest/download"; $env:MEDIA_DB_VERSION="20260211213000"; docker compose up
 ```
 
 ## Generated Files
@@ -105,6 +115,7 @@ $env:MEDIA_DB_EXPORT_PACKS="0"; docker compose up
 Primary outputs in `artefacts/`:
 - `titles.pack`
 - `icons.pack`
+- `offline_db_manifest.json` (generated when both packs are exported)
 
 Additional build/debug outputs in `artefacts/`:
 - `titles.US.en.json`
@@ -169,16 +180,25 @@ Inputs:
 Outputs:
 - `titles.pack` (magic `CFTITLE1`)
 - `icons.pack` (magic `CFICONP1`)
+- `offline_db_manifest.json` (schema `1`, includes `db_version`, `generated_at_utc`, and file URL/size/SHA-256 metadata)
 
 Automatic export command used by builder:
 
 ```bash
-python /usr/local/bin/export_offline_db.py --source-dir /workspace/artefacts --output-dir /workspace/artefacts
+python /usr/local/bin/export_offline_db.py \
+  --source-dir /workspace/artefacts \
+  --output-dir /workspace/artefacts \
+  [--manifest-base-url "$MEDIA_DB_MANIFEST_BASE_URL"] \
+  [--manifest-name "$MEDIA_DB_MANIFEST_NAME"] \
+  [--db-version "$MEDIA_DB_VERSION"]
 ```
 
 Automatic skip behavior:
 - Adds `--skip-icons` if `icon.db` is missing.
 - Adds `--skip-metadata` if `titles.US.en.json` is missing.
+- Manifest generation is skipped when either `titles.pack` or `icons.pack` is not produced.
+
+If `MEDIA_DB_MANIFEST_BASE_URL` is empty, manifest URLs are relative file names (`titles.pack`, `icons.pack`).
 
 Metadata exporter includes only meaningful rows (at least one of: `name`, `publisher`, `intro`, `description`, `size`, `version`, `releaseDate`, `isDemo`).
 
@@ -190,6 +210,17 @@ From repo root:
 python scripts/export_offline_db.py --source-dir artefacts --output-dir artefacts
 ```
 
+Release-oriented example:
+
+```bash
+python scripts/export_offline_db.py \
+  --source-dir artefacts \
+  --output-dir release/offline_db \
+  --manifest-base-url https://github.com/<owner>/<repo>/releases/latest/download \
+  --db-version 20260211213000 \
+  --manifest-name offline_db_manifest.json
+```
+
 Supported options:
 
 ```text
@@ -199,6 +230,46 @@ Supported options:
 --output-dir <dir>      Output directory (default: ./offline_db)
 --skip-icons            Export metadata pack only
 --skip-metadata         Export icons pack only
+--manifest-base-url <url>  Base URL prefix for manifest file URLs
+--manifest-name <name>      Manifest file name (default: offline_db_manifest.json)
+--db-version <value>        Manifest db_version (default: UTC timestamp)
+```
+
+## PowerShell Release Helper
+
+Use `build_offline_db.ps1` to export packs and manifest into `release/offline_db`:
+
+```powershell
+.\build_offline_db.ps1 `
+  -SourceDir "$PSScriptRoot\artefacts" `
+  -OutputDir "$PSScriptRoot\release\offline_db" `
+  -ManifestBaseUrl "https://github.com/<owner>/<repo>/releases/latest/download" `
+  -ManifestName "offline_db_manifest.json" `
+  -DbVersion "20260211213000"
+```
+
+## Manifest File
+
+When both packs are exported, `offline_db_manifest.json` is written with this structure:
+
+```json
+{
+  "schema": 1,
+  "db_version": "20260211213000",
+  "generated_at_utc": "2026-02-11T21:30:00Z",
+  "files": {
+    "titles.pack": {
+      "url": "https://github.com/<owner>/<repo>/releases/latest/download/titles.pack",
+      "size": 0,
+      "sha256": "<sha256>"
+    },
+    "icons.pack": {
+      "url": "https://github.com/<owner>/<repo>/releases/latest/download/icons.pack",
+      "size": 0,
+      "sha256": "<sha256>"
+    }
+  }
+}
 ```
 
 ## Progress and Summary Files
@@ -224,6 +295,7 @@ Icon/Banner files:
 - Daily incremental run: `docker compose up`.
 - Metadata monitoring only: `MEDIA_DB_CHECK_UPDATES_ONLY=1 docker compose up`.
 - Full refresh for selected mode: `MEDIA_DB_RESET=1 MEDIA_DB_MODE=<icons|banners|both> docker compose up`.
+- Release-ready manifest URLs: `MEDIA_DB_MANIFEST_BASE_URL=https://github.com/<owner>/<repo>/releases/latest/download docker compose up`.
 - Debug build without packs: `MEDIA_DB_EXPORT_PACKS=0 docker compose up`.
 
 ## Troubleshooting
@@ -246,12 +318,13 @@ Fix:
 - Convert file to LF.
 - Rebuild/restart container.
 
-### Packs not generated
+### Packs or manifest not generated
 
 Check:
 - `MEDIA_DB_EXPORT_PACKS=1`
 - `MEDIA_DB_CHECK_UPDATES_ONLY=0`
 - Required inputs exist in `artefacts/` (`titles.US.en.json`, `icon.db`).
+- `offline_db_manifest.json` is only generated when both `titles.pack` and `icons.pack` are exported in the same run.
 
 ### `icons.pack` missing in banners-only runs
 

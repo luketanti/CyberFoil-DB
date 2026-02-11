@@ -16,9 +16,13 @@ RESET="${MEDIA_DB_RESET:-0}"
 EXPORT_PACKS="${MEDIA_DB_EXPORT_PACKS:-1}"
 FORCE_TITLES_REFRESH="${MEDIA_DB_FORCE_TITLES_REFRESH:-0}"
 CHECK_UPDATES_ONLY="${MEDIA_DB_CHECK_UPDATES_ONLY:-0}"
+MANIFEST_BASE_URL="${MEDIA_DB_MANIFEST_BASE_URL:-}"
+MANIFEST_NAME="${MEDIA_DB_MANIFEST_NAME:-offline_db_manifest.json}"
+DB_VERSION="${MEDIA_DB_VERSION:-}"
 
 echo "Running media DB build mode: $MODE"
 echo "Reset: $RESET, Export packs: $EXPORT_PACKS, Force titles refresh: $FORCE_TITLES_REFRESH, Check-only: $CHECK_UPDATES_ONLY"
+echo "Manifest config: base_url='${MANIFEST_BASE_URL:-<relative file paths>}' name='$MANIFEST_NAME' db_version='${DB_VERSION:-<auto UTC timestamp>}'"
 
 if [ ! -d nut ]; then
   cp -a /opt/nut nut
@@ -589,6 +593,15 @@ if [ "$EXPORT_PACKS" = "1" ]; then
 
   if [ -f "$EXPORT_SCRIPT" ]; then
     export_args=(--source-dir /workspace/artefacts --output-dir /workspace/artefacts)
+    if [ -n "$MANIFEST_BASE_URL" ]; then
+      export_args+=(--manifest-base-url "$MANIFEST_BASE_URL")
+    fi
+    if [ -n "$DB_VERSION" ]; then
+      export_args+=(--db-version "$DB_VERSION")
+    fi
+    if [ -n "$MANIFEST_NAME" ]; then
+      export_args+=(--manifest-name "$MANIFEST_NAME")
+    fi
     if [ ! -f /workspace/artefacts/icon.db ]; then
       export_args+=(--skip-icons)
     fi
