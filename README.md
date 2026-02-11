@@ -1,5 +1,9 @@
 # CyberFoil-DB
 
+[![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white)](https://discord.gg/gGy7hWxJeP)
+[![All Releases Downloads](https://img.shields.io/github/downloads/luketanti/CyberFoil-DB/total?logo=github)](https://github.com/luketanti/CyberFoil-DB/releases)
+[![Latest Release Downloads](https://img.shields.io/github/downloads/luketanti/CyberFoil-DB/latest/total?logo=github)](https://github.com/luketanti/CyberFoil-DB/releases/latest)
+
 CyberFoil-DB builds offline title metadata and media artefacts for CyberFoil, then exports runtime pack files plus a manifest.
 
 Final target outputs:
